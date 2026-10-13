@@ -31,7 +31,8 @@ erDiagram
         text book_author
         text title
         text body
-        numeric spoiler_level "numeric(5,2), от 0 до 100"
+        integer total_pages "total_pages > 0"
+        integer required_pages "0 <= required_pages <= total_pages"
         timestamptz created_at
         timestamptz updated_at
     }
