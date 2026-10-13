@@ -1,0 +1,1831 @@
+openapi: 3.1.1
+info:
+  title: PageMates API
+  version: 0.1.0
+  description: |-
+    API первой итерации MVP: аккаунты, профили с любимыми книгами, обсуждения, комментарии, подписки и взаимная дружба через заявки. Читательский дневник и его данные остаются на устройстве пользователя.
+
+    Авторизация: все операции, кроме регистрации и входа, требуют Authorization: Bearer <access_token>. Идентификатор действующего пользователя берётся из токена. Логин, пароль и срок Premium другого пользователя не раскрываются. Состояние Premium доступно в своём профиле; создание треда проверяет его на сервере.
+
+    Защита от спойлеров: уровень треда вычисляется из required_pages / total_pages * 100. При включённой защите и прогрессе читателя p < 100 тред доступен, если уровень не превышает max(0, p - 5). Запас составляет 5 процентных пунктов. При p = 100 или выключенной защите доступны все треды. Проверка выполняется без предварительного округления. Отсутствующий прогресс считается равным 0. Переданные прогресс и настройки не сохраняются; достоверность прочтения не проверяется. Правило применяется к поиску, чтению треда и комментариев, добавлению комментариев и явной подписке на тред.
+
+    Пагинация: limit по умолчанию 20, максимум 100. Для продолжения передаётся next_cursor предыдущего ответа. null завершает список. Следующий запрос сохраняет пользователя, фильтры, сортировку, контекст защиты и limit; при изменении параметров начинается новый просмотр без курсора. Несовместимый, повреждённый или истёкший курсор возвращает 400 INVALID_CURSOR. Пустой список возвращает items: [] и next_cursor: null. Пагинация не фиксирует снимок данных; при изменениях между запросами клиент объединяет записи по id (для друзей и подписок — по идентификатору пользователя).
+
+    Валидация: некорректный JSON или нарушение схемы параметра URL возвращает 400; нарушение схемы JSON-тела или межполевого ограничения — 422. Неизвестные поля тела отклоняются. Описания операций определяют ошибки бизнес-правил. Пропущенные поля PATCH сохраняются; null разрешён только там, где явно указан в схеме. Логин, имя и описание профиля, названия и авторы книг, заголовки и тексты сообщений очищаются от крайних пробелов до проверки длины. Пароли, токены и курсоры не преобразуются. Внутренние пробелы и переводы строк в сообщениях сохраняются.
+
+    Дружба взаимна и независима от подписок. Принятие заявки и создание дружбы — одна транзакция. Подписка на автора включает его существующие и будущие треды; явная подписка на тред сохраняется при отписке от автора.
+servers:
+- url: /api/v1
+tags:
+- name: Auth
+  description: Регистрация и вход.
+- name: Profiles
+  description: Свой профиль и публичные профили пользователей.
+- name: FavoriteBooks
+  description: Книги, выбранные для отображения в профиле.
+- name: Threads
+  description: Поиск, создание и просмотр обсуждений.
+- name: Comments
+  description: Комментарии к доступным обсуждениям.
+- name: Subscriptions
+  description: Явные подписки на треды и подписки на авторов.
+- name: Friends
+  description: Заявки в друзья и взаимная дружба.
+security:
+- BearerAuth: []
+paths:
+  /auth/register:
+    post:
+      tags:
+      - Auth
+      summary: Зарегистрироваться
+      description: 'Создаёт аккаунт без Premium и возвращает свой профиль. После регистрации пользователь выполняет
+        вход. Возраст младше 18 лет: 422 AGE_RESTRICTED. Занятый нормализованный логин: 409 LOGIN_TAKEN.'
+      operationId: register
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+            example:
+              login: anna
+              password: reader-example-2026
+              display_name: Анна
+              age: 25
+      responses:
+        '201':
+          description: Успешный результат.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SelfProfile'
+              example:
+                id: 11111111-1111-4111-8111-111111111111
+                display_name: Анна
+                avatar_url: null
+                bio: Люблю исторические романы.
+                created_at: '2026-10-13T12:00:00Z'
+                updated_at: '2026-10-13T12:00:00Z'
+                login: anna
+                premium_until: null
+          headers:
+            Location:
+              description: Относительный URL созданного ресурса.
+              schema:
+                type: string
+                format: uri-reference
+              example: /api/v1/me
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+        '409':
+          $ref: '#/components/responses/LoginTaken'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /auth/login:
+    post:
+      tags:
+      - Auth
+      summary: Войти
+      description: Проверяет логин и пароль, возвращает Bearer-токен и срок его действия. После истечения токена
+        пользователь выполняет вход повторно. Выход на клиенте удаляет локальный токен, не отзывая его на сервере.
+      operationId: login
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+            example:
+              login: anna
+              password: reader-example-2026
+      responses:
+        '200':
+          description: Успешный результат.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthSession'
+              example:
+                access_token: example-access-token
+                token_type: Bearer
+                expires_in: 86400
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/InvalidCredentials'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /me:
+    get:
+      tags:
+      - Profiles
+      summary: Получить свой профиль
+      description: Возвращает собственные данные и срок Premium. Premium активен, когда premium_until позже текущего
+        времени. null означает отсутствие Premium. Любимые книги доступны через GET /users/{user_id}/favorite-books.
+      operationId: getMe
+      responses:
+        '200':
+          description: Успешный результат.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SelfProfile'
+              example:
+                id: 11111111-1111-4111-8111-111111111111
+                display_name: Анна
+                avatar_url: null
+                bio: Люблю исторические романы.
+                created_at: '2026-10-13T12:00:00Z'
+                updated_at: '2026-10-13T12:00:00Z'
+                login: anna
+                premium_until: null
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    patch:
+      tags:
+      - Profiles
+      summary: Изменить свой профиль
+      description: Обновляет только переданные поля. Аватар задаётся HTTPS URL. Логин, пароль и Premium этой операцией
+        не изменяются.
+      operationId: updateMe
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateProfileRequest'
+            example:
+              bio: Читаю классику.
+      responses:
+        '200':
+          description: Успешный результат.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SelfProfile'
+              example:
+                id: 11111111-1111-4111-8111-111111111111
+                display_name: Анна
+                avatar_url: null
+                bio: Читаю классику.
+                created_at: '2026-10-13T12:00:00Z'
+                updated_at: '2026-10-13T12:00:00Z'
+                login: anna
+                premium_until: null
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /users/{user_id}:
+    get:
+      tags:
+      - Profiles
+      summary: Получить профиль пользователя
+      description: Возвращает публичные поля и отношения с текущим пользователем. Логин, пароль, срок Premium и
+        личный дневник другого пользователя не возвращаются. Любимые книги получаются отдельным списком; треды автора
+        — через поиск с author_id.
+      operationId: getUserProfile
+      parameters:
+      - $ref: '#/components/parameters/UserId'
+      responses:
+        '200':
+          description: Успешный результат.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublicProfile'
+              example:
+                id: 11111111-1111-4111-8111-111111111111
+                display_name: Анна
+                avatar_url: null
+                bio: Люблю исторические романы.
+                created_at: '2026-10-13T12:00:00Z'
+                updated_at: '2026-10-13T12:00:00Z'
+                relationship:
+                  is_friend: false
+                  is_following_author: false
+                  pending_friend_request: null
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /users/{user_id}/favorite-books:
+    get:
+      tags:
+      - FavoriteBooks
+      summary: Получить любимые книги профиля
+      description: 'Доступно для своего и чужого профиля после авторизации. Порядок: position ASC, id ASC. Пустой
+        профиль возвращает пустой список.'
+      operationId: listUserFavoriteBooks
+      parameters:
+      - $ref: '#/components/parameters/UserId'
+      - $ref: '#/components/parameters/Limit'
+      - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: Успешный результат.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FavoriteBookPage'
+              example:
+                items:
+                - id: 44444444-4444-4444-8444-444444444444
+                  title: Мастер и Маргарита
+                  author: Михаил Булгаков
+                  position: 0
+                  created_at: '2026-10-13T12:00:00Z'
+                  updated_at: '2026-10-13T12:00:00Z'
+                next_cursor: null
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /me/favorite-books:
+    post:
+      tags:
+      - FavoriteBooks
+      summary: Добавить любимую книгу
+      description: Добавляет книгу в свой публичный профиль. Запись не связана с локальным дневником и не синхронизируется
+        с ним.
+      operationId: createFavoriteBook
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateFavoriteBookRequest'
+            example:
+              title: Мастер и Маргарита
+              author: Михаил Булгаков
+              position: 0
+      responses:
+        '201':
+          description: Успешный результат.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FavoriteBook'
+              example:
+                id: 44444444-4444-4444-8444-444444444444
+                title: Мастер и Маргарита
+                author: Михаил Булгаков
+                position: 0
+                created_at: '2026-10-13T12:00:00Z'
+                updated_at: '2026-10-13T12:00:00Z'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /me/favorite-books/{favorite_book_id}:
+    patch:
+      tags:
+      - FavoriteBooks
+      summary: Изменить любимую книгу или её позицию
+      description: 'Изменяет собственную запись. Чужая или отсутствующая запись: 404 NOT_FOUND. Одинаковые позиции
+        разрешены; порядок определяется также id.'
+      operationId: updateFavoriteBook
+      parameters:
+      - $ref: '#/components/parameters/FavoriteBookId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateFavoriteBookRequest'
+            example:
+              position: 1
+      responses:
+        '200':
+          description: Успешный результат.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FavoriteBook'
+              example:
+                id: 44444444-4444-4444-8444-444444444444
+                title: Мастер и Маргарита
+                author: Михаил Булгаков
+                position: 1
+                created_at: '2026-10-13T12:00:00Z'
+                updated_at: '2026-10-13T12:00:00Z'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    delete:
+      tags:
+      - FavoriteBooks
+      summary: Удалить любимую книгу
+      description: 'Удаляет только запись из своего публичного профиля. Чужая или отсутствующая запись: 404 NOT_FOUND.'
+      operationId: deleteFavoriteBook
+      parameters:
+      - $ref: '#/components/parameters/FavoriteBookId'
+      responses:
+        '204':
+          description: Операция выполнена. Тело ответа отсутствует.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /threads/search:
+    post:
+      tags:
+      - Threads
+      summary: Найти доступные обсуждения
+      description: |-
+        Выполняет чтение без сохранения фильтров и контекстов прогресса. Все заданные фильтры применяются совместно.
+        По book_title сначала используются точные совпадения без учёта регистра и крайних пробелов. Если среди доступных тредов точных совпадений нет, возвращаются похожие названия. book_author при наличии задаёт точное совпадение после такой же нормализации. author_id ограничивает выдачу конкретным автором тредов.
+        followed_only объединяет явные подписки на треды и треды отслеживаемых авторов без повторений. При отсутствии подписок выдача пуста. Неизвестный author_id даёт пустую выдачу.
+        Защита применяется до пагинации; недоступные треды, включая их заголовки, не возвращаются. При включенной защите и отсутствии контекста для книги доступны только треды уровня 0%.
+        При поиске по названию порядок: релевантность DESC, created_at DESC, id DESC. Без названия: created_at DESC, id DESC. Курсор учитывает фильтры, режим защиты и контексты прогресса; при изменении любого из них поиск начинается без курсора.
+      operationId: searchThreads
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SearchThreadsRequest'
+            example:
+              book_title: Мастер и Маргарита
+              spoiler_protection: true
+              reading_contexts:
+              - book_title: Мастер и Маргарита
+                book_author: Михаил Булгаков
+                reading_progress: 60
+              limit: 20
+      responses:
+        '200':
+          description: Успешный результат.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ThreadPage'
+              example:
+                items:
+                - id: 33333333-3333-4333-8333-333333333333
+                  author:
+                    id: 22222222-2222-4222-8222-222222222222
+                    display_name: Михаил
+                    avatar_url: null
+                  book_title: Мастер и Маргарита
+                  book_author: Михаил Булгаков
+                  title: Обсуждение первой половины
+                  total_pages: 400
+                  required_pages: 200
+                  spoiler_level: 50
+                  is_followed_directly: false
+                  is_followed_via_author: false
+                  created_at: '2026-10-13T12:00:00Z'
+                  updated_at: '2026-10-13T12:00:00Z'
+                next_cursor: null
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /threads:
+    post:
+      tags:
+      - Threads
+      summary: Создать обсуждение
+      description: 'Доступно только с активным Premium; иначе 403 PREMIUM_REQUIRED. Создатель определяется по токену.
+        Сервер сохраняет total_pages и required_pages и вычисляет spoiler_level. required_pages > total_pages: 422
+        VALIDATION_FAILED. Ответ содержит созданный тред независимо от локального прогресса создателя; дальнейшее
+        чтение использует общее правило защиты.'
+      operationId: createThread
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateThreadRequest'
+            example:
+              book_title: Мастер и Маргарита
+              book_author: Михаил Булгаков
+              title: Обсуждение первой половины
+              body: Какие впечатления от первой половины книги?
+              total_pages: 400
+              required_pages: 200
+      responses:
+        '201':
+          description: Успешный результат.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Thread'
+              example:
+                id: 33333333-3333-4333-8333-333333333333
+                author:
+                  id: 11111111-1111-4111-8111-111111111111
+                  display_name: Анна
+                  avatar_url: null
+                book_title: Мастер и Маргарита
+                book_author: Михаил Булгаков
+                title: Обсуждение первой половины
+                total_pages: 400
+                required_pages: 200
+                spoiler_level: 50
+                is_followed_directly: false
+                is_followed_via_author: false
+                created_at: '2026-10-13T12:00:00Z'
+                updated_at: '2026-10-13T12:00:00Z'
+                body: Какие впечатления от первой половины книги?
+          headers:
+            Location:
+              description: Относительный URL созданного ресурса.
+              schema:
+                type: string
+                format: uri-reference
+              example: /api/v1/threads/33333333-3333-4333-8333-333333333333
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+        '403':
+          $ref: '#/components/responses/PremiumRequired'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /threads/{thread_id}:
+    get:
+      tags:
+      - Threads
+      summary: Получить обсуждение
+      description: 'Применяет защиту от спойлеров. Недоступный по переданному прогрессу тред: 403 SPOILER_BLOCKED
+        без его заголовка или текста. Отсутствующий тред: 404 NOT_FOUND.'
+      operationId: getThread
+      parameters:
+      - $ref: '#/components/parameters/ThreadId'
+      - $ref: '#/components/parameters/SpoilerProtection'
+      - $ref: '#/components/parameters/ReadingProgress'
+      responses:
+        '200':
+          description: Успешный результат.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Thread'
+              example:
+                id: 33333333-3333-4333-8333-333333333333
+                author:
+                  id: 22222222-2222-4222-8222-222222222222
+                  display_name: Михаил
+                  avatar_url: null
+                book_title: Мастер и Маргарита
+                book_author: Михаил Булгаков
+                title: Обсуждение первой половины
+                total_pages: 400
+                required_pages: 200
+                spoiler_level: 50
+                is_followed_directly: false
+                is_followed_via_author: false
+                created_at: '2026-10-13T12:00:00Z'
+                updated_at: '2026-10-13T12:00:00Z'
+                body: Какие впечатления от первой половины книги?
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/SpoilerBlocked'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /threads/{thread_id}/comments:
+    get:
+      tags:
+      - Comments
+      summary: Получить комментарии
+      description: 'Плоский список в порядке created_at ASC, id ASC. Каждый комментарий использует уровень спойлеров
+        треда. Защита проверяется до выдачи: 403 SPOILER_BLOCKED для недоступного треда. Начальный текст треда не
+        дублируется среди комментариев.'
+      operationId: listComments
+      parameters:
+      - $ref: '#/components/parameters/ThreadId'
+      - $ref: '#/components/parameters/SpoilerProtection'
+      - $ref: '#/components/parameters/ReadingProgress'
+      - $ref: '#/components/parameters/Limit'
+      - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: Успешный результат.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommentPage'
+              example:
+                items:
+                - id: 55555555-5555-4555-8555-555555555555
+                  thread_id: 33333333-3333-4333-8333-333333333333
+                  author:
+                    id: 11111111-1111-4111-8111-111111111111
+                    display_name: Анна
+                    avatar_url: null
+                  body: Мне понравилась атмосфера.
+                  created_at: '2026-10-13T12:00:00Z'
+                  updated_at: '2026-10-13T12:00:00Z'
+                next_cursor: null
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/SpoilerBlocked'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    post:
+      tags:
+      - Comments
+      summary: Добавить комментарий
+      description: 'Автор определяется по токену. Premium не требуется. Недоступный по переданному прогрессу тред:
+        403 SPOILER_BLOCKED, комментарий не создаётся.'
+      operationId: createComment
+      parameters:
+      - $ref: '#/components/parameters/ThreadId'
+      - $ref: '#/components/parameters/SpoilerProtection'
+      - $ref: '#/components/parameters/ReadingProgress'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateCommentRequest'
+            example:
+              body: Мне понравилась атмосфера.
+      responses:
+        '201':
+          description: Успешный результат.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Comment'
+              example:
+                id: 55555555-5555-4555-8555-555555555555
+                thread_id: 33333333-3333-4333-8333-333333333333
+                author:
+                  id: 11111111-1111-4111-8111-111111111111
+                  display_name: Анна
+                  avatar_url: null
+                body: Мне понравилась атмосфера.
+                created_at: '2026-10-13T12:00:00Z'
+                updated_at: '2026-10-13T12:00:00Z'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+        '403':
+          $ref: '#/components/responses/SpoilerBlocked'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /me/thread-subscriptions/{thread_id}:
+    put:
+      tags:
+      - Subscriptions
+      summary: Отслеживать тред
+      description: 'Создаёт явную подписку на доступный тред. Повторный запрос не создаёт дубль и возвращает 204.
+        Доступность проверяется и при повторном запросе: 403 SPOILER_BLOCKED для недоступного треда.'
+      operationId: subscribeToThread
+      parameters:
+      - $ref: '#/components/parameters/ThreadId'
+      - $ref: '#/components/parameters/SpoilerProtection'
+      - $ref: '#/components/parameters/ReadingProgress'
+      responses:
+        '204':
+          description: Операция выполнена. Тело ответа отсутствует.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/SpoilerBlocked'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    delete:
+      tags:
+      - Subscriptions
+      summary: Прекратить явное отслеживание треда
+      description: Удаляет явную подписку независимо от доступности треда по прогрессу. Отсутствующая подписка или
+        удалённый тред также дают 204. Если автор отслеживается, его тред остаётся в общей ленте; это отражает is_followed_via_author.
+      operationId: unsubscribeFromThread
+      parameters:
+      - $ref: '#/components/parameters/ThreadId'
+      responses:
+        '204':
+          description: Операция выполнена. Тело ответа отсутствует.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /me/author-subscriptions:
+    get:
+      tags:
+      - Subscriptions
+      summary: Получить отслеживаемых авторов
+      description: 'Порядок: created_at DESC, author.id DESC. Список принадлежит текущему пользователю.'
+      operationId: listAuthorSubscriptions
+      parameters:
+      - $ref: '#/components/parameters/Limit'
+      - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: Успешный результат.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthorSubscriptionPage'
+              example:
+                items:
+                - author:
+                    id: 22222222-2222-4222-8222-222222222222
+                    display_name: Михаил
+                    avatar_url: null
+                  created_at: '2026-10-13T12:00:00Z'
+                next_cursor: null
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /me/author-subscriptions/{author_id}:
+    put:
+      tags:
+      - Subscriptions
+      summary: Отслеживать обсуждения автора
+      description: 'Существующие и будущие треды автора включаются в поиск с followed_only=true с учётом защиты
+        от спойлеров. Дружба не требуется и не изменяется. Подписка на себя: 422 SELF_ACTION_NOT_ALLOWED. Повторный
+        запрос возвращает 204 без дубля.'
+      operationId: subscribeToAuthor
+      parameters:
+      - $ref: '#/components/parameters/AuthorId'
+      responses:
+        '204':
+          description: Операция выполнена. Тело ответа отсутствует.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    delete:
+      tags:
+      - Subscriptions
+      summary: Прекратить отслеживание автора
+      description: Отсутствующая подписка также даёт 204. Явные подписки на отдельные треды, заявки в друзья и дружба
+        сохраняются.
+      operationId: unsubscribeFromAuthor
+      parameters:
+      - $ref: '#/components/parameters/AuthorId'
+      responses:
+        '204':
+          description: Операция выполнена. Тело ответа отсутствует.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /me/friend-requests:
+    post:
+      tags:
+      - Friends
+      summary: Отправить заявку в друзья
+      description: 'Создаёт pending-заявку, доступную получателю во входящих, отправителю — в исходящих. Дружба
+        не возникает автоматически. Заявка себе: 422 SELF_ACTION_NOT_ALLOWED. Существующая дружба: 409 ALREADY_FRIENDS.
+        Ожидающая заявка в любом направлении, включая одновременный запрос: 409 FRIEND_REQUEST_PENDING; встречная
+        заявка не означает принятие. После отказа или прекращения дружбы можно отправить новую заявку, если ожидающей
+        нет. Подписки не меняются.'
+      operationId: createFriendRequest
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateFriendRequest'
+            example:
+              recipient_id: 22222222-2222-4222-8222-222222222222
+      responses:
+        '201':
+          description: Успешный результат.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FriendRequest'
+              example:
+                id: 66666666-6666-4666-8666-666666666666
+                sender:
+                  id: 11111111-1111-4111-8111-111111111111
+                  display_name: Анна
+                  avatar_url: null
+                recipient:
+                  id: 22222222-2222-4222-8222-222222222222
+                  display_name: Михаил
+                  avatar_url: null
+                status: pending
+                created_at: '2026-10-13T12:00:00Z'
+                responded_at: null
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/FriendRequestConflict'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    get:
+      tags:
+      - Friends
+      summary: Получить свои заявки в друзья
+      description: 'Возвращает только заявки с участием текущего пользователя. Порядок: created_at DESC, id DESC.
+        По умолчанию возвращаются ожидающие входящие заявки. Принятые и отклонённые доступны через status.'
+      operationId: listFriendRequests
+      parameters:
+      - name: direction
+        in: query
+        schema:
+          type: string
+          enum:
+          - incoming
+          - outgoing
+          default: incoming
+      - name: status
+        in: query
+        schema:
+          type: string
+          enum:
+          - pending
+          - accepted
+          - declined
+          - all
+          default: pending
+      - $ref: '#/components/parameters/Limit'
+      - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: Успешный результат.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FriendRequestPage'
+              example:
+                items:
+                - id: 66666666-6666-4666-8666-666666666666
+                  sender:
+                    id: 22222222-2222-4222-8222-222222222222
+                    display_name: Михаил
+                    avatar_url: null
+                  recipient:
+                    id: 11111111-1111-4111-8111-111111111111
+                    display_name: Анна
+                    avatar_url: null
+                  status: pending
+                  created_at: '2026-10-13T12:00:00Z'
+                  responded_at: null
+                next_cursor: null
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /me/friend-requests/{request_id}:
+    patch:
+      tags:
+      - Friends
+      summary: Принять или отклонить заявку
+      description: 'Только получатель может ответить на pending-заявку. Для отправителя возвращается 403 FORBIDDEN;
+        для постороннего или отсутствующей заявки — 404 NOT_FOUND. Ответ на уже завершённую заявку: 409 FRIEND_REQUEST_RESOLVED
+        даже при совпадении нового статуса с текущим. accepted атомарно меняет статус и создаёт одну взаимную дружбу;
+        при ошибке оба изменения откатываются. declined меняет статус без создания дружбы. Обе операции заполняют
+        responded_at и убирают заявку из ожидающих. Подписки не меняются.'
+      operationId: respondToFriendRequest
+      parameters:
+      - $ref: '#/components/parameters/RequestId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RespondToFriendRequest'
+            example:
+              status: accepted
+      responses:
+        '200':
+          description: Успешный результат.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FriendRequest'
+              example:
+                id: 66666666-6666-4666-8666-666666666666
+                sender:
+                  id: 22222222-2222-4222-8222-222222222222
+                  display_name: Михаил
+                  avatar_url: null
+                recipient:
+                  id: 11111111-1111-4111-8111-111111111111
+                  display_name: Анна
+                  avatar_url: null
+                status: accepted
+                created_at: '2026-10-13T12:00:00Z'
+                responded_at: '2026-10-13T12:00:00Z'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/FriendRequestResolved'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /me/friends:
+    get:
+      tags:
+      - Friends
+      summary: Получить список друзей
+      description: 'Возвращает взаимные дружеские связи текущего пользователя. Порядок: created_at DESC, friend.id
+        DESC. Ожидающие заявки сюда не входят.'
+      operationId: listFriends
+      parameters:
+      - $ref: '#/components/parameters/Limit'
+      - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: Успешный результат.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FriendshipPage'
+              example:
+                items:
+                - friend:
+                    id: 22222222-2222-4222-8222-222222222222
+                    display_name: Михаил
+                    avatar_url: null
+                  created_at: '2026-10-13T12:00:00Z'
+                next_cursor: null
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /me/friends/{user_id}:
+    delete:
+      tags:
+      - Friends
+      summary: Прекратить дружбу
+      description: Любой участник удаляет связь сразу для обоих пользователей. Подписки не меняются. Завершённая
+        заявка сохраняет статус; повторное принятие старой заявки не восстанавливает дружбу. При отсутствии дружбы
+        возвращается 204.
+      operationId: deleteFriendship
+      parameters:
+      - $ref: '#/components/parameters/UserId'
+      responses:
+        '204':
+          description: Операция выполнена. Тело ответа отсутствует.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      description: Токен, полученный через POST /auth/login.
+  parameters:
+    UserId:
+      name: user_id
+      in: path
+      required: true
+      schema:
+        $ref: '#/components/schemas/Id'
+    AuthorId:
+      name: author_id
+      in: path
+      required: true
+      schema:
+        $ref: '#/components/schemas/Id'
+    ThreadId:
+      name: thread_id
+      in: path
+      required: true
+      schema:
+        $ref: '#/components/schemas/Id'
+    FavoriteBookId:
+      name: favorite_book_id
+      in: path
+      required: true
+      schema:
+        $ref: '#/components/schemas/Id'
+    RequestId:
+      name: request_id
+      in: path
+      required: true
+      schema:
+        $ref: '#/components/schemas/Id'
+    Limit:
+      name: limit
+      in: query
+      schema:
+        $ref: '#/components/schemas/PageSize'
+    Cursor:
+      name: cursor
+      in: query
+      schema:
+        $ref: '#/components/schemas/Cursor'
+    SpoilerProtection:
+      name: spoiler_protection
+      in: query
+      schema:
+        $ref: '#/components/schemas/SpoilerProtection'
+    ReadingProgress:
+      name: reading_progress
+      in: query
+      description: Прогресс по книге текущего треда. При отсутствии используется 0. При выключенной защите не влияет
+        на доступ, но проверяется диапазон.
+      schema:
+        $ref: '#/components/schemas/ReadingProgress'
+        default: 0
+      example: 60
+  responses:
+    BadRequest:
+      description: 'Некорректный JSON, параметр запроса или курсор: INVALID_JSON, INVALID_ARGUMENT, INVALID_CURSOR.'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: INVALID_ARGUMENT
+            message: Некорректный параметр запроса.
+            fields: []
+    Unauthorized:
+      description: 'Bearer-токен отсутствует, истёк или недействителен: UNAUTHORIZED.'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: UNAUTHORIZED
+            message: Необходим вход в приложение.
+            fields: []
+      headers:
+        WWW-Authenticate:
+          description: Схема аутентификации.
+          schema:
+            type: string
+          example: Bearer
+    InvalidCredentials:
+      description: 'Неверный логин или пароль: INVALID_CREDENTIALS. Ответ не раскрывает существование аккаунта.'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: INVALID_CREDENTIALS
+            message: Неверный логин или пароль.
+            fields: []
+    Forbidden:
+      description: 'FORBIDDEN: действие запрещено для текущего пользователя.'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: FORBIDDEN
+            message: Только получатель может ответить на заявку.
+            fields: []
+    NotFound:
+      description: 'Объект не найден или недоступен текущему пользователю: NOT_FOUND.'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: NOT_FOUND
+            message: Объект не найден.
+            fields: []
+    ValidationError:
+      description: 'Нарушены ограничения полей или связи между ними: VALIDATION_FAILED, AGE_RESTRICTED, SELF_ACTION_NOT_ALLOWED,
+        DUPLICATE_READING_CONTEXT.'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: VALIDATION_FAILED
+            message: Проверьте введённые данные.
+            fields: []
+    InternalError:
+      description: 'Внутренняя ошибка сервера: INTERNAL_ERROR. Ответ не содержит внутренних технических данных.'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: INTERNAL_ERROR
+            message: Не удалось выполнить запрос.
+            fields: []
+    LoginTaken:
+      description: 'LOGIN_TAKEN: нормализованный логин уже занят.'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: LOGIN_TAKEN
+            message: Этот логин уже занят.
+            fields: []
+    PremiumRequired:
+      description: 'PREMIUM_REQUIRED: для создания обсуждения нужен активный Premium.'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: PREMIUM_REQUIRED
+            message: Для создания обсуждения нужен Premium.
+            fields: []
+    SpoilerBlocked:
+      description: 'SPOILER_BLOCKED: тред недоступен по переданному прогрессу. Ответ не содержит заголовка, текста
+        треда или комментариев.'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: SPOILER_BLOCKED
+            message: Обсуждение недоступно при текущем прогрессе чтения.
+            fields: []
+    FriendRequestResolved:
+      description: 'FRIEND_REQUEST_RESOLVED: заявка уже принята или отклонена. Состояние заявки и дружбы не меняется.'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: FRIEND_REQUEST_RESOLVED
+            message: На эту заявку уже ответили.
+            fields: []
+    FriendRequestConflict:
+      description: Между пользователями уже есть дружба (ALREADY_FRIENDS) или ожидающая заявка в любом направлении
+        (FRIEND_REQUEST_PENDING).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          examples:
+            already_friends:
+              value:
+                code: ALREADY_FRIENDS
+                message: Вы уже друзья.
+                fields: []
+            pending_request:
+              value:
+                code: FRIEND_REQUEST_PENDING
+                message: Между вами уже есть ожидающая заявка.
+                fields: []
+  schemas:
+    Id:
+      type: string
+      format: uuid
+    Timestamp:
+      type: string
+      format: date-time
+      description: Метка времени RFC 3339 с часовым поясом; сервер возвращает UTC.
+    Login:
+      type: string
+      minLength: 3
+      maxLength: 64
+      pattern: \S
+      description: Логин без учёта регистра и крайних пробелов. Сервер сохраняет и возвращает нормализованное значение.
+    Password:
+      type: string
+      minLength: 8
+      maxLength: 128
+      writeOnly: true
+      description: Пароль передаётся без обрезки пробелов или изменения регистра и никогда не возвращается в ответах.
+    DisplayName:
+      type: string
+      minLength: 1
+      maxLength: 100
+      pattern: \S
+    AvatarUrl:
+      type:
+      - string
+      - 'null'
+      format: uri
+      pattern: ^https://
+      maxLength: 2048
+      description: HTTPS URL изображения. null означает отсутствие аватара.
+    Bio:
+      type: string
+      minLength: 0
+      maxLength: 2000
+    BookTitle:
+      type: string
+      minLength: 1
+      maxLength: 300
+      pattern: \S
+    BookAuthor:
+      type: string
+      minLength: 1
+      maxLength: 300
+      pattern: \S
+    ThreadTitle:
+      type: string
+      minLength: 1
+      maxLength: 200
+      pattern: \S
+    MessageBody:
+      type: string
+      minLength: 1
+      maxLength: 10000
+      pattern: \S
+    TotalPages:
+      type: integer
+      minimum: 1
+      maximum: 2147483647
+      description: Общее количество страниц в экземпляре книги создателя треда.
+    RequiredPages:
+      type: integer
+      minimum: 0
+      maximum: 2147483647
+      description: Необходимое количество прочитанных страниц. Не превышает total_pages. Ноль означает обсуждение
+        без спойлеров, равенство total_pages — обсуждение всей книги. Связь полей проверяется сервером.
+    ReadingProgress:
+      type: number
+      minimum: 0
+      maximum: 100
+      description: Процент прочитанного в экземпляре книги читателя. Передаётся клиентом, не сохраняется на сервере.
+        Достоверность прочтения не проверяется.
+    SpoilerProtection:
+      type: boolean
+      default: true
+      description: Включает правило защиты от спойлеров, описанное во введении к API. Настройка действует только
+        для текущего запроса.
+    Position:
+      type: integer
+      minimum: 0
+      maximum: 2147483647
+      description: Позиция любимой книги в профиле. Меньшие значения отображаются первыми; одинаковые позиции разрешены,
+        порядок уточняется по id.
+    Cursor:
+      type: string
+      minLength: 1
+      maxLength: 2048
+      description: Непрозрачный курсор из next_cursor предыдущего ответа. Клиент не разбирает и не изменяет его.
+    PageSize:
+      type: integer
+      minimum: 1
+      maximum: 100
+      default: 20
+    UserSummary:
+      type: object
+      required:
+      - id
+      - display_name
+      - avatar_url
+      properties:
+        id:
+          $ref: '#/components/schemas/Id'
+        display_name:
+          $ref: '#/components/schemas/DisplayName'
+        avatar_url:
+          $ref: '#/components/schemas/AvatarUrl'
+    Profile:
+      allOf:
+      - $ref: '#/components/schemas/UserSummary'
+      - type: object
+        required:
+        - bio
+        - created_at
+        - updated_at
+        properties:
+          bio:
+            $ref: '#/components/schemas/Bio'
+          created_at:
+            $ref: '#/components/schemas/Timestamp'
+          updated_at:
+            $ref: '#/components/schemas/Timestamp'
+    PendingFriendRequest:
+      type: object
+      required:
+      - id
+      - direction
+      properties:
+        id:
+          $ref: '#/components/schemas/Id'
+        direction:
+          type: string
+          enum:
+          - incoming
+          - outgoing
+          description: Направление заявки относительно текущего пользователя.
+    UserRelationship:
+      type: object
+      required:
+      - is_friend
+      - is_following_author
+      - pending_friend_request
+      properties:
+        is_friend:
+          type: boolean
+        is_following_author:
+          type: boolean
+        pending_friend_request:
+          anyOf:
+          - $ref: '#/components/schemas/PendingFriendRequest'
+          - type: 'null'
+      description: Отношения текущего пользователя с владельцем профиля. Для своего профиля флаги false, заявка
+        null. При установленной дружбе ожидающей заявки нет.
+    PublicProfile:
+      allOf:
+      - $ref: '#/components/schemas/Profile'
+      - type: object
+        required:
+        - relationship
+        properties:
+          relationship:
+            $ref: '#/components/schemas/UserRelationship'
+    SelfProfile:
+      allOf:
+      - $ref: '#/components/schemas/Profile'
+      - type: object
+        required:
+        - login
+        - premium_until
+        properties:
+          login:
+            $ref: '#/components/schemas/Login'
+          premium_until:
+            anyOf:
+            - $ref: '#/components/schemas/Timestamp'
+            - type: 'null'
+    RegisterRequest:
+      type: object
+      required:
+      - login
+      - password
+      - display_name
+      - age
+      properties:
+        login:
+          $ref: '#/components/schemas/Login'
+        password:
+          $ref: '#/components/schemas/Password'
+        display_name:
+          $ref: '#/components/schemas/DisplayName'
+        age:
+          type: integer
+          minimum: 18
+          description: Возраст в полных годах. Значение младше 18 отклоняется с AGE_RESTRICTED. Возраст проверяется
+            при регистрации и не сохраняется.
+      additionalProperties: false
+    LoginRequest:
+      type: object
+      required:
+      - login
+      - password
+      properties:
+        login:
+          $ref: '#/components/schemas/Login'
+        password:
+          type: string
+          minLength: 1
+          maxLength: 128
+          writeOnly: true
+      additionalProperties: false
+    AuthSession:
+      type: object
+      required:
+      - access_token
+      - token_type
+      - expires_in
+      properties:
+        access_token:
+          type: string
+          minLength: 1
+          description: Непрозрачный для клиента токен доступа.
+        token_type:
+          type: string
+          enum:
+          - Bearer
+        expires_in:
+          type: integer
+          minimum: 1
+          description: Срок действия токена в секундах с момента выдачи.
+    UpdateProfileRequest:
+      type: object
+      properties:
+        display_name:
+          $ref: '#/components/schemas/DisplayName'
+        avatar_url:
+          $ref: '#/components/schemas/AvatarUrl'
+        bio:
+          $ref: '#/components/schemas/Bio'
+      description: Пропущенные поля сохраняют значения. null очищает аватар, пустая строка очищает bio.
+      additionalProperties: false
+      minProperties: 1
+    FavoriteBook:
+      type: object
+      required:
+      - id
+      - title
+      - author
+      - position
+      - created_at
+      - updated_at
+      properties:
+        id:
+          $ref: '#/components/schemas/Id'
+        title:
+          $ref: '#/components/schemas/BookTitle'
+        author:
+          $ref: '#/components/schemas/BookAuthor'
+        position:
+          $ref: '#/components/schemas/Position'
+        created_at:
+          $ref: '#/components/schemas/Timestamp'
+        updated_at:
+          $ref: '#/components/schemas/Timestamp'
+    CreateFavoriteBookRequest:
+      type: object
+      required:
+      - title
+      - author
+      - position
+      properties:
+        title:
+          $ref: '#/components/schemas/BookTitle'
+        author:
+          $ref: '#/components/schemas/BookAuthor'
+        position:
+          $ref: '#/components/schemas/Position'
+      additionalProperties: false
+    UpdateFavoriteBookRequest:
+      type: object
+      properties:
+        title:
+          $ref: '#/components/schemas/BookTitle'
+        author:
+          $ref: '#/components/schemas/BookAuthor'
+        position:
+          $ref: '#/components/schemas/Position'
+      description: Пропущенные поля не изменяются. position задаёт порядок отображения.
+      additionalProperties: false
+      minProperties: 1
+    CreateThreadRequest:
+      type: object
+      required:
+      - book_title
+      - book_author
+      - title
+      - body
+      - total_pages
+      - required_pages
+      properties:
+        book_title:
+          $ref: '#/components/schemas/BookTitle'
+        book_author:
+          $ref: '#/components/schemas/BookAuthor'
+        title:
+          $ref: '#/components/schemas/ThreadTitle'
+        body:
+          $ref: '#/components/schemas/MessageBody'
+        total_pages:
+          $ref: '#/components/schemas/TotalPages'
+        required_pages:
+          $ref: '#/components/schemas/RequiredPages'
+      description: Клиент передаёт исходные числа страниц, а не процент. required_pages не должен превышать total_pages.
+        Для всей книги клиент передаёт одинаковые значения этих полей.
+      additionalProperties: false
+    ThreadSummary:
+      type: object
+      required:
+      - id
+      - author
+      - book_title
+      - book_author
+      - title
+      - total_pages
+      - required_pages
+      - spoiler_level
+      - is_followed_directly
+      - is_followed_via_author
+      - created_at
+      - updated_at
+      properties:
+        id:
+          $ref: '#/components/schemas/Id'
+        author:
+          $ref: '#/components/schemas/UserSummary'
+        book_title:
+          $ref: '#/components/schemas/BookTitle'
+        book_author:
+          $ref: '#/components/schemas/BookAuthor'
+        title:
+          $ref: '#/components/schemas/ThreadTitle'
+        total_pages:
+          $ref: '#/components/schemas/TotalPages'
+        required_pages:
+          $ref: '#/components/schemas/RequiredPages'
+        spoiler_level:
+          type: number
+          minimum: 0
+          maximum: 100
+          readOnly: true
+          description: Вычисляемый процент required_pages / total_pages * 100. Предназначен для отображения; доступность
+            проверяется по исходным значениям без предварительного округления.
+        is_followed_directly:
+          type: boolean
+        is_followed_via_author:
+          type: boolean
+        created_at:
+          $ref: '#/components/schemas/Timestamp'
+        updated_at:
+          $ref: '#/components/schemas/Timestamp'
+    Thread:
+      allOf:
+      - $ref: '#/components/schemas/ThreadSummary'
+      - type: object
+        required:
+        - body
+        properties:
+          body:
+            $ref: '#/components/schemas/MessageBody'
+    ReadingContext:
+      type: object
+      required:
+      - book_title
+      - book_author
+      - reading_progress
+      properties:
+        book_title:
+          $ref: '#/components/schemas/BookTitle'
+        book_author:
+          $ref: '#/components/schemas/BookAuthor'
+        reading_progress:
+          $ref: '#/components/schemas/ReadingProgress'
+      description: Прогресс для одной книги. Соответствие треду определяется по паре book_title и book_author после
+        удаления крайних пробелов и приведения к нижнему регистру. Приблизительное совпадение названия не используется
+        для переноса прогресса. Контекст не сохраняется.
+      additionalProperties: false
+    SearchThreadsRequest:
+      type: object
+      properties:
+        book_title:
+          $ref: '#/components/schemas/BookTitle'
+        book_author:
+          $ref: '#/components/schemas/BookAuthor'
+        author_id:
+          $ref: '#/components/schemas/Id'
+        followed_only:
+          type: boolean
+          default: false
+          description: Только явно отслеживаемые треды и треды отслеживаемых авторов, без повторений.
+        spoiler_protection:
+          $ref: '#/components/schemas/SpoilerProtection'
+        reading_contexts:
+          type: array
+          items:
+            $ref: '#/components/schemas/ReadingContext'
+          maxItems: 1000
+          default: []
+          description: Не более одного контекста для каждой нормализованной пары названия и автора. Дубликаты отклоняются
+            с DUPLICATE_READING_CONTEXT. Для книги без контекста прогресс равен 0. При выключенной защите контексты
+            не влияют на выдачу, но проходят валидацию.
+        limit:
+          $ref: '#/components/schemas/PageSize'
+        cursor:
+          $ref: '#/components/schemas/Cursor'
+      additionalProperties: false
+    Comment:
+      type: object
+      required:
+      - id
+      - thread_id
+      - author
+      - body
+      - created_at
+      - updated_at
+      properties:
+        id:
+          $ref: '#/components/schemas/Id'
+        thread_id:
+          $ref: '#/components/schemas/Id'
+        author:
+          $ref: '#/components/schemas/UserSummary'
+        body:
+          $ref: '#/components/schemas/MessageBody'
+        created_at:
+          $ref: '#/components/schemas/Timestamp'
+        updated_at:
+          $ref: '#/components/schemas/Timestamp'
+    CreateCommentRequest:
+      type: object
+      required:
+      - body
+      properties:
+        body:
+          $ref: '#/components/schemas/MessageBody'
+      additionalProperties: false
+    AuthorSubscription:
+      type: object
+      required:
+      - author
+      - created_at
+      properties:
+        author:
+          $ref: '#/components/schemas/UserSummary'
+        created_at:
+          $ref: '#/components/schemas/Timestamp'
+    FriendRequestStatus:
+      type: string
+      enum:
+      - pending
+      - accepted
+      - declined
+    FriendRequest:
+      type: object
+      required:
+      - id
+      - sender
+      - recipient
+      - status
+      - created_at
+      - responded_at
+      properties:
+        id:
+          $ref: '#/components/schemas/Id'
+        sender:
+          $ref: '#/components/schemas/UserSummary'
+        recipient:
+          $ref: '#/components/schemas/UserSummary'
+        status:
+          $ref: '#/components/schemas/FriendRequestStatus'
+        created_at:
+          $ref: '#/components/schemas/Timestamp'
+        responded_at:
+          anyOf:
+          - $ref: '#/components/schemas/Timestamp'
+          - type: 'null'
+      description: responded_at равно null только для pending. Принятие или отклонение устанавливает время ответа.
+        Завершённая заявка сохраняет статус после прекращения дружбы; текущее состояние дружбы определяется отдельно.
+      allOf:
+      - if:
+          properties:
+            status:
+              const: pending
+          required:
+          - status
+        then:
+          properties:
+            responded_at:
+              type: 'null'
+        else:
+          properties:
+            responded_at:
+              $ref: '#/components/schemas/Timestamp'
+    CreateFriendRequest:
+      type: object
+      required:
+      - recipient_id
+      properties:
+        recipient_id:
+          $ref: '#/components/schemas/Id'
+      additionalProperties: false
+    RespondToFriendRequest:
+      type: object
+      required:
+      - status
+      properties:
+        status:
+          type: string
+          enum:
+          - accepted
+          - declined
+      additionalProperties: false
+    Friendship:
+      type: object
+      required:
+      - friend
+      - created_at
+      properties:
+        friend:
+          $ref: '#/components/schemas/UserSummary'
+        created_at:
+          $ref: '#/components/schemas/Timestamp'
+      description: Взаимная дружба. friend — другой участник, created_at — время установления дружбы.
+    FavoriteBookPage:
+      type: object
+      required:
+      - items
+      - next_cursor
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/FavoriteBook'
+          maxItems: 100
+        next_cursor:
+          anyOf:
+          - $ref: '#/components/schemas/Cursor'
+          - type: 'null'
+      description: next_cursor равен null на последней странице. Число элементов не превышает запрошенный limit.
+    ThreadPage:
+      type: object
+      required:
+      - items
+      - next_cursor
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ThreadSummary'
+          maxItems: 100
+        next_cursor:
+          anyOf:
+          - $ref: '#/components/schemas/Cursor'
+          - type: 'null'
+      description: next_cursor равен null на последней странице. Число элементов не превышает запрошенный limit.
+    CommentPage:
+      type: object
+      required:
+      - items
+      - next_cursor
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Comment'
+          maxItems: 100
+        next_cursor:
+          anyOf:
+          - $ref: '#/components/schemas/Cursor'
+          - type: 'null'
+      description: next_cursor равен null на последней странице. Число элементов не превышает запрошенный limit.
+    AuthorSubscriptionPage:
+      type: object
+      required:
+      - items
+      - next_cursor
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/AuthorSubscription'
+          maxItems: 100
+        next_cursor:
+          anyOf:
+          - $ref: '#/components/schemas/Cursor'
+          - type: 'null'
+      description: next_cursor равен null на последней странице. Число элементов не превышает запрошенный limit.
+    FriendRequestPage:
+      type: object
+      required:
+      - items
+      - next_cursor
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/FriendRequest'
+          maxItems: 100
+        next_cursor:
+          anyOf:
+          - $ref: '#/components/schemas/Cursor'
+          - type: 'null'
+      description: next_cursor равен null на последней странице. Число элементов не превышает запрошенный limit.
+    FriendshipPage:
+      type: object
+      required:
+      - items
+      - next_cursor
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Friendship'
+          maxItems: 100
+        next_cursor:
+          anyOf:
+          - $ref: '#/components/schemas/Cursor'
+          - type: 'null'
+      description: next_cursor равен null на последней странице. Число элементов не превышает запрошенный limit.
+    FieldError:
+      type: object
+      required:
+      - field
+      - message
+      properties:
+        field:
+          type: string
+          description: Поле запроса с префиксом body, query или path; например body.required_pages.
+        message:
+          type: string
+    Error:
+      type: object
+      required:
+      - code
+      - message
+      - fields
+      properties:
+        code:
+          type: string
+          enum:
+          - INVALID_JSON
+          - INVALID_ARGUMENT
+          - INVALID_CURSOR
+          - VALIDATION_FAILED
+          - AGE_RESTRICTED
+          - INVALID_CREDENTIALS
+          - UNAUTHORIZED
+          - FORBIDDEN
+          - NOT_FOUND
+          - LOGIN_TAKEN
+          - PREMIUM_REQUIRED
+          - SPOILER_BLOCKED
+          - FRIEND_REQUEST_PENDING
+          - ALREADY_FRIENDS
+          - FRIEND_REQUEST_RESOLVED
+          - SELF_ACTION_NOT_ALLOWED
+          - DUPLICATE_READING_CONTEXT
+          - INTERNAL_ERROR
+        message:
+          type: string
+          description: Понятное пользователю описание ошибки. Логика клиента опирается на code, а не на текст.
+        fields:
+          type: array
+          items:
+            $ref: '#/components/schemas/FieldError'
+          description: Ошибки отдельных полей; пустой массив, если ошибка не относится к конкретному полю.
