@@ -57,9 +57,18 @@ erDiagram
         timestamptz created_at
     }
 
-    user_friends {
-        uuid user_id PK, FK
-        uuid friend_id PK, FK
+    friend_requests {
+        uuid id PK
+        uuid sender_id FK "sender_id != recipient_id"
+        uuid recipient_id FK
+        text status "pending / accepted / declined; одна pending на пару"
+        timestamptz created_at
+        timestamptz responded_at "NULL только для pending"
+    }
+
+    friendships {
+        uuid user_low_id PK, FK "user_low_id < user_high_id"
+        uuid user_high_id PK, FK
         timestamptz created_at
     }
 
@@ -71,6 +80,8 @@ erDiagram
     threads ||--o{ thread_subscriptions : "thread_id"
     users ||--o{ author_subscriptions : "subscriber_id"
     users ||--o{ author_subscriptions : "author_id"
-    users ||--o{ user_friends : "user_id"
-    users ||--o{ user_friends : "friend_id"
+    users ||..o{ friend_requests : "sender_id"
+    users ||..o{ friend_requests : "recipient_id"
+    users ||--o{ friendships : "user_low_id"
+    users ||--o{ friendships : "user_high_id"
 ```
