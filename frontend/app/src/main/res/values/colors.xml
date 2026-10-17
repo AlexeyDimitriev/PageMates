@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="background">#1D3B2F</color>
+    <color name="background_outer">#10241C</color>
+    <color name="foreground">#F6ECD8</color>
+    <color name="card">#F6ECD8</color>
+    <color name="card_foreground">#20170F</color>
+    <color name="primary">#B84A33</color>
+    <color name="primary_foreground">#FFF6E6</color>
+    <color name="secondary">#2A4D3F</color>
+    <color name="muted_foreground">#A9C2B0</color>
+    <color name="accent">#E3AD3F</color>
+    <color name="input_background">#FFFAF0</color>
+    <color name="destructive">#D4183D</color>
+    <color name="white">#FFFFFF</color>
+    <color name="black">#000000</color>
+    <color name="cover_text">#FFF6E6</color>
+    <color name="foreground_15">#26F6ECD8</color>
+    <color name="foreground_25">#40F6ECD8</color>
+    <color name="foreground_30">#4DF6ECD8</color>
+    <color name="header_tag_bg">#66000000</color>
+    <color name="card_foreground_10">#1A20170F</color>
+    <color name="card_foreground_15">#2620170F</color>
+    <color name="card_foreground_20">#3320170F</color>
+    <color name="card_foreground_30">#4D20170F</color>
+    <color name="card_foreground_45">#7320170F</color>
+    <color name="card_foreground_65">#A620170F</color>
+    <color name="card_foreground_70">#B320170F</color>
+</resources>

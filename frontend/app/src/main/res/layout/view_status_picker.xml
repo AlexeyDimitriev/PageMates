@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:background="@drawable/bg_status_track"
+    android:orientation="horizontal"
+    android:padding="4dp">
+
+    <TextView
+        android:id="@+id/statusUnread"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_weight="1"
+        android:gravity="center"
+        android:paddingHorizontal="8dp"
+        android:paddingVertical="10dp"
+        android:text="@string/status_unread"
+        android:textSize="13sp" />
+
+    <TextView
+        android:id="@+id/statusReading"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_weight="1"
+        android:gravity="center"
+        android:paddingHorizontal="8dp"
+        android:paddingVertical="10dp"
+        android:text="@string/status_reading"
+        android:textSize="13sp" />
+
+    <TextView
+        android:id="@+id/statusRead"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_weight="1"
+        android:gravity="center"
+        android:paddingHorizontal="8dp"
+        android:paddingVertical="10dp"
+        android:text="@string/status_read"
+        android:textSize="13sp" />
+</LinearLayout>

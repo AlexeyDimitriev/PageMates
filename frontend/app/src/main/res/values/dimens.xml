@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <dimen name="screen_padding">24dp</dimen>
+    <dimen name="card_radius">24dp</dimen>
+    <dimen name="cover_list_width">72dp</dimen>
+    <dimen name="cover_detail_width">112dp</dimen>
+    <dimen name="avatar_size">96dp</dimen>
+</resources>

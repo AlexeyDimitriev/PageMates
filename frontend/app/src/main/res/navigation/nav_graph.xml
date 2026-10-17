@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<navigation xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:id="@+id/nav_graph"
+    app:startDestination="@id/profileFragment">
+
+    <fragment
+        android:id="@+id/profileFragment"
+        android:name="com.example.pagemates.ui.profile.ProfileFragment"
+        android:label="@string/app_name"
+        tools:layout="@layout/fragment_profile">
+        <action
+            android:id="@+id/action_profile_to_addBook"
+            app:destination="@id/addBookFragment" />
+        <action
+            android:id="@+id/action_profile_to_bookDetail"
+            app:destination="@id/bookDetailFragment" />
+    </fragment>
+
+    <fragment
+        android:id="@+id/addBookFragment"
+        android:name="com.example.pagemates.ui.addbook.AddBookFragment"
+        android:label="@string/new_book"
+        tools:layout="@layout/fragment_add_book" />
+
+    <fragment
+        android:id="@+id/bookDetailFragment"
+        android:name="com.example.pagemates.ui.bookdetail.BookDetailFragment"
+        android:label="@string/pages_read"
+        tools:layout="@layout/fragment_book_detail">
+        <argument
+            android:name="bookId"
+            app:argType="string" />
+    </fragment>
+</navigation>

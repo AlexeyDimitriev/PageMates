@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.PageMates" parent="Theme.Material3.Light.NoActionBar">
+        <item name="colorPrimary">@color/primary</item>
+        <item name="colorOnPrimary">@color/primary_foreground</item>
+        <item name="colorSecondary">@color/secondary</item>
+        <item name="colorOnSecondary">@color/foreground</item>
+        <item name="android:statusBarColor">@color/background</item>
+        <item name="android:navigationBarColor">@color/background</item>
+        <item name="android:windowBackground">@color/background</item>
+        <item name="android:textColorPrimary">@color/foreground</item>
+        <item name="android:fontFamily">sans-serif</item>
+    </style>
+
+    <style name="TextAppearance.PageMates.Display" parent="TextAppearance.Material3.HeadlineMedium">
+        <item name="android:fontFamily">serif</item>
+        <item name="android:textColor">@color/foreground</item>
+        <item name="android:textStyle">normal</item>
+    </style>
+
+    <style name="TextAppearance.PageMates.FieldLabel" parent="TextAppearance.Material3.LabelSmall">
+        <item name="android:textAllCaps">true</item>
+        <item name="android:textSize">11sp</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:letterSpacing">0.14</item>
+        <item name="android:textColor">@color/card_foreground_65</item>
+    </style>
+
+    <style name="Widget.PageMates.Field" parent="Widget.AppCompat.EditText">
+        <item name="android:background">@drawable/bg_field</item>
+        <item name="android:padding">12dp</item>
+        <item name="android:textSize">15sp</item>
+        <item name="android:textColor">@color/card_foreground</item>
+        <item name="android:textColorHint">@color/card_foreground_45</item>
+    </style>
+</resources>
